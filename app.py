@@ -1,9 +1,11 @@
 import streamlit as st
+from pathlib import Path
 from dotenv import load_dotenv
 
-from rag import FoodRAG
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env", override=False)
 
-load_dotenv()
+from rag import FoodRAG
 
 st.set_page_config(
     page_title="Food AI - Trợ lý tư vấn món ăn",
@@ -14,7 +16,7 @@ st.set_page_config(
 st.title("🍜 Food AI — Trợ lý tư vấn món ăn")
 st.caption(
     "Tìm kiếm món ăn bằng Sentence Transformers + ChromaDB "
-    "và tạo câu trả lời bằng OpenAI."
+    "và tạo câu trả lời bằng Gemini AI."
 )
 
 
@@ -42,14 +44,14 @@ Kiểm tra các mục sau:
 with st.sidebar:
     st.header("⚙️ Trạng thái hệ thống")
     st.caption(f"Vector DB: {rag.count} món ăn")
-
+    
     if rag.llm_enabled:
         st.success("OpenAI LLM: Đã cấu hình API key")
         st.caption("Model: OPENAI_MODEL trong file .env")
     else:
         st.warning("OpenAI LLM: Chưa cấu hình API key")
         st.caption("Đang dùng câu trả lời dự phòng từ RAG.")
-
+    
     st.divider()
     st.header("🔎 Bộ lọc")
     st.write("Nhập khu vực và mức giá trực tiếp trong câu hỏi.")
@@ -110,7 +112,7 @@ if query:
 
             if rag.llm_error:
                 st.warning(
-                    "OpenAI chưa được sử dụng thành công. "
+                    "Gemini API chưa được sử dụng thành công. "
                     "Ứng dụng đã chuyển sang câu trả lời dự phòng từ RAG."
                 )
                 st.code(rag.llm_error)

@@ -1,6 +1,8 @@
+from llm_openai import generate_answer
 import re
 import unicodedata
 from pathlib import Path
+import os
 
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -20,6 +22,9 @@ def normalize(text):
 
 class FoodRAG:
     def __init__(self):
+        # app.py dùng hai thuộc tính này để hiển thị trạng thái OpenAI.
+        self.llm_enabled = bool(os.getenv("OPENAI_API_KEY", "").strip())
+        self.llm_error = None
         if not DB_DIR.exists():
             raise FileNotFoundError(
                 f"Chưa có thư mục Vector DB: {DB_DIR}. "
@@ -148,26 +153,62 @@ class FoodRAG:
 
         return filters, results
 
-    @staticmethod
-    def answer(query, results, filters):
+    def answer(self, query, results, filters):
+        """Tạo câu trả lời bằng OpenAI trên context RAG; dự phòng nếu API lỗi."""
         if not results:
+            self.llm_error = None
             return (
                 "Mình chưa tìm thấy món phù hợp. "
                 "Bạn có thể thử khu vực khác hoặc nới rộng mức giá."
             )
 
+        # Luôn chuẩn bị câu trả lời dự phòng từ dữ liệu đã truy xuất.
         lines = ["Mình tìm thấy các món phù hợp với nhu cầu của bạn:", ""]
         for index, item in enumerate(results, 1):
             price = (
-                item["gia_khuyen_mai"]
-                if item["gia_khuyen_mai"] is not None
-                else item["gia"]
+                item.get("gia_khuyen_mai")
+                if item.get("gia_khuyen_mai") is not None
+                else item.get("gia")
             )
             price_text = (
                 f"{price:,.0f}đ"
                 if isinstance(price, (int, float))
                 else "Chưa cập nhật giá"
             )
-            lines.append(f"{index}. {item['ten_mon']} — {price_text}")
-            lines.append(f"   📍 {item['dia_chi']}")
-        return "\n".join(lines)
+            lines.append(
+                f"{index}. {item.get('ten_mon', 'Chưa có tên')} — {price_text}"
+            )
+            lines.append(
+                f"   📍 {item.get('dia_chi') or 'Chưa cập nhật địa chỉ'}"
+            )
+        fallback_answer = "\n".join(lines)
+
+        if not self.llm_enabled:
+            self.llm_error = "Chưa cấu hình OPENAI_API_KEY trong file .env."
+            return fallback_answer
+
+        context_parts = []
+        for item in results:
+            price = (
+                item.get("gia_khuyen_mai")
+                if item.get("gia_khuyen_mai") is not None
+                else item.get("gia")
+            )
+            context_parts.append(
+                f"Tên món: {item.get('ten_mon', '')}; "
+                f"Quận/huyện: {item.get('quan_huyen', '')}; "
+                f"Địa chỉ: {item.get('dia_chi', '')}; "
+                f"Giá: {price if price is not None else 'Chưa cập nhật'}; "
+                f"Thông tin: {item.get('document', '')}"
+            )
+        context = "\n".join(context_parts)
+
+        try:
+            answer_text = generate_answer(query, context)
+            if not answer_text or not str(answer_text).strip():
+                raise RuntimeError("OpenAI trả về nội dung rỗng.")
+            self.llm_error = None
+            return str(answer_text).strip()
+        except Exception as exc:
+            self.llm_error = f"{type(exc).__name__}: {exc}"
+            return fallback_answer

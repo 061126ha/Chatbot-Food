@@ -1,83 +1,139 @@
+
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from openai import OpenAI
 
 
-class OpenAIAnswerer:
-    """Gọi OpenAI để diễn đạt kết quả truy xuất từ Food RAG."""
+# =====================================================
+# 1. CẤU HÌNH ĐƯỜNG DẪN
+# =====================================================
 
-    def __init__(self):
-        self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-        self.client = (
-            OpenAI(api_key=self.api_key, timeout=30.0)
-            if self.api_key
-            else None
+BASE_DIR = Path(__file__).resolve().parent
+ENV_PATH = BASE_DIR / ".env"
+
+# Đọc biến môi trường từ file .env
+load_dotenv(dotenv_path=ENV_PATH, override=False)
+
+
+# =====================================================
+# 2. KHỞI TẠO GEMINI CLIENT
+# =====================================================
+
+def get_client():
+    """
+    Khởi tạo Gemini API thông qua OpenAI SDK.
+    """
+
+    # Đọc lại cấu hình API Key
+    load_dotenv(dotenv_path=ENV_PATH, override=False)
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+
+    if not api_key:
+        raise ValueError(
+            "Không tìm thấy Gemini API Key trong file .env. "
+            "Hãy kiểm tra lại OPENAI_API_KEY."
         )
 
-    @property
-    def is_configured(self) -> bool:
-        return self.client is not None
+    client = OpenAI(
+        api_key=api_key,
+        base_url=(
+            "https://generativelanguage.googleapis.com/"
+            "v1beta/openai/"
+        ),
+        timeout=30.0
+    )
 
-    def generate_answer(self, query: str, results: list, filters: dict) -> str:
-        if not self.client:
-            raise RuntimeError("Thiếu OPENAI_API_KEY trong file .env.")
+    return client
 
-        # Chỉ gửi những trường cần thiết, không gửi dữ liệu thừa.
-        food_lines = []
-        for index, item in enumerate(results, 1):
-            price = (
-                item.get("gia_khuyen_mai")
-                if item.get("gia_khuyen_mai") is not None
-                else item.get("gia")
-            )
-            price_text = (
-                f"{price:,.0f} VND"
-                if isinstance(price, (int, float))
-                else "Chưa có giá"
-            )
-            food_lines.append(
-                f"{index}. Tên: {item.get('ten_mon', '')}; "
-                f"Khu vực: {item.get('quan_huyen', '')}; "
-                f"Địa chỉ: {item.get('dia_chi', '')}; "
-                f"Giá: {price_text}; "
-                f"Thông tin: {item.get('document', '')}"
-            )
 
-        context = "\n".join(food_lines)
+# =====================================================
+# 3. KIỂM TRA CẤU HÌNH API
+# =====================================================
 
-        system_prompt = """
-Bạn là trợ lý tư vấn món ăn của dự án Food AI.
-Chỉ sử dụng thông tin món ăn được cung cấp trong CONTEXT.
-Không tự bịa tên món, giá, địa chỉ, khuyến mãi hoặc tình trạng còn bán.
-Trả lời bằng tiếng Việt tự nhiên, ngắn gọn, dễ đọc.
-Nếu dữ liệu thiếu, hãy nói rõ là chưa có thông tin.
-Đề xuất tối đa 3-5 món phù hợp nhất và giải thích ngắn gọn.
-"""
+def is_configured():
+    """
+    Kiểm tra Gemini API Key đã được cấu hình hay chưa.
+    """
 
-        user_prompt = f"""
-Câu hỏi của người dùng:
-{query}
+    load_dotenv(dotenv_path=ENV_PATH, override=False)
 
-Bộ lọc đã nhận diện:
-{filters}
+    return bool(
+        os.getenv("OPENAI_API_KEY", "").strip()
+    )
 
-CONTEXT — các món được truy xuất từ cơ sở dữ liệu:
-{context}
 
-Hãy tư vấn dựa đúng trên CONTEXT.
-"""
+# =====================================================
+# 4. SINH CÂU TRẢ LỜI BẰNG GEMINI
+# =====================================================
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-            max_tokens=500,
+def generate_answer(question, context):
+    """
+    Nhận câu hỏi và dữ liệu RAG,
+    gửi đến Gemini để tạo câu trả lời.
+
+    Tương thích với rag.py:
+        generate_answer(query, context)
+    """
+
+    # Lấy tên model Gemini
+    model = os.getenv(
+        "OPENAI_MODEL",
+        "gemini-2.5-flash"
+    ).strip() or "gemini-2.5-flash"
+
+    # Khởi tạo client
+    client = get_client()
+
+    # Gửi yêu cầu đến Gemini
+    response = client.chat.completions.create(
+        model=model,
+
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Bạn là trợ lý AI tư vấn món ăn Việt Nam. "
+
+                    "Trả lời bằng tiếng Việt, "
+                    "ngắn gọn, rõ ràng và hữu ích. "
+
+                    "Chỉ sử dụng thông tin có trong dữ liệu "
+                    "RAG được cung cấp. "
+
+                    "Không tự bịa giá, địa chỉ, nguyên liệu "
+                    "hoặc thông tin món ăn. "
+
+                    "Nếu dữ liệu không đủ để trả lời, "
+                    "hãy nói rõ là chưa có thông tin."
+                )
+            },
+
+            {
+                "role": "user",
+                "content": (
+                    f"Dữ liệu món ăn đã truy xuất:\n"
+                    f"{context}\n\n"
+
+                    f"Câu hỏi của người dùng:\n"
+                    f"{question}\n\n"
+
+                    "Hãy phân tích dữ liệu và đưa ra "
+                    "lời tư vấn phù hợp."
+                )
+            }
+        ],
+
+        temperature=0.3
+    )
+
+    # Nhận nội dung phản hồi
+    content = response.choices[0].message.content
+    if not content:
+        raise RuntimeError(
+            "Gemini không trả về nội dung."
         )
 
-        answer = response.choices[0].message.content
-        if not answer:
-            raise RuntimeError("OpenAI trả về nội dung rỗng.")
-        return answer.strip()
+    return content.strip()
